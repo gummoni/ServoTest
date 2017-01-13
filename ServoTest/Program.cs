@@ -32,7 +32,7 @@ namespace ConsoleApplication1
         ControlMode OldControl = ControlMode.Stop;      //前回の制御パターン
 
         const double MaxTorque = 0.5;                   //最大トルク出力値
-        const double LimitTorque = 10.0;                //トルク制限値
+        const double LimitTorque = 50.0;                //トルク制限値
         const double TargetSpeed = 10.0;                //目標速度
         const double TargetAcc = 1.0;                   //目標加速度
         const double TargetDec = 2.3;                   //目標減速度
@@ -79,6 +79,12 @@ namespace ConsoleApplication1
                 if (OldControl == ControlMode.Dec)
                 {
                     //現状維持(減速からすぐ加速しないよう１回休み)
+                    ControlTorque(0.0);
+                    OldControl = ControlMode.Stop;
+                }
+                if (TargetSpeed <= Math.Abs(Cur.Speed))
+                {
+                    //速度制限
                     ControlTorque(0.0);
                     OldControl = ControlMode.Stop;
                 }
