@@ -31,6 +31,8 @@ namespace ConsoleApplication1
         public double Power { get; set; } = 0.0;        //現在モーター出力
         ControlMode OldControl = ControlMode.Stop;      //前回の制御パターン
 
+        const double MaxTorque = 0.5;                   //最大トルク出力値
+        const double LimitTorque = 10.0;                //トルク制限値
         const double TargetSpeed = 10.0;                //目標速度
         const double TargetAcc = 1.0;                   //目標加速度
         const double TargetDec = 2.3;                   //目標減速度
@@ -102,6 +104,9 @@ namespace ConsoleApplication1
         {
             Cur.ControlAcc = targetAcc;
             Power += Cur.Torque * targetAcc;
+            //トルク出力制限
+            if (+LimitTorque < Power) Power = LimitTorque;
+            if (-LimitTorque > Power) Power = -LimitTorque;
         }
 
         /// <summary>
@@ -112,7 +117,7 @@ namespace ConsoleApplication1
             var random1 = (50 - Cur.Position) / 1000;
             var random2 = -Cur.Speed / 800;
             //random1 = random2 = 0.0;
-            var nextPosition = Cur.Position + Power + random1 + random2;      // 外乱の影響の付加
+            var nextPosition = Cur.Position + Power * MaxTorque + random1 + random2;      // 外乱の影響の付加
             FeedBack(nextPosition);
             Console.WriteLine($"Pos={Cur.Position}, Spd={Cur.Speed}, Pwr={Power}, Acc={Cur.ResultAcc}");
             //Console.WriteLine(Cur.Speed);
