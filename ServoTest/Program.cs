@@ -9,96 +9,85 @@ namespace ConsoleApplication1
             var servo = new Servo();
             for (var i = 0; i < 1300; i++)
             {
-                servo.ControlPosition(370);
+                //servo.ControlTorque(-0.2);
+                servo.ControlSpeed();
                 servo.OnNext();
             }
 
+            Console.WriteLine("--end--");
             Console.ReadKey();
         }
     }
 
-    public enum ControlMode
-    {
-        Acc,
-        Dec,
-        Stop,
-    }
-
     public class Servo
     {
-        public Motor Old { get; set; } = new Motor();   //前回位置
-        public Motor Cur { get; set; } = new Motor();   //現在位置
+        //サーボステータス
+        public double GoalPosition { get; set; } = 100; //目標位置
+        public double Position { get; private set; }    //現在位置
+        public double Speed { get; private set; }       //現在速度
         public double Power { get; set; } = 0.0;        //現在モーター出力
-        ControlMode OldControl = ControlMode.Stop;      //前回の制御パターン
 
-        const double MaxTorque = 0.5;                   //最大トルク出力値
+        //内部パラメータ
+        double Diff { get; set; }                       //加速度補正
+        double ControlAcc { get; set; }                 //目標加速度
+        double ResultAcc { get; set; }                  //実測加速度
+
+        //設定値
         const double LimitTorque = 50.0;                //トルク制限値
-        const double TargetSpeed = 10.0;                //目標速度
-        const double TargetAcc = 1.0;                   //目標加速度
-        const double TargetDec = 2.3;                   //目標減速度
+        const double TargetSpeed = 3.0;                 //目標速度
+        const double TargetAcc = 1.0;                   //目標加速度(P)
+        const double TargetDec = 1.3;                   //目標減速度(P)
+        const double IGain = 2.0;                       //Iゲイン
+        const double DGain　= 3.0;                      //Dゲイン
 
-        /// <summary>
-        /// 位置制御(所定の位置へ移動）
-        /// </summary>
-        /// <param name="targetPosition"></param>
-        public void ControlPosition(double targetPosition)
-        {
-            ControlSpeed(targetPosition - Cur.Position);
-        }
+        //固有特性
+        const double MotorGain = 1.2;                   //最大トルク出力値
+
 
         /// <summary>
         /// 速度制御(PTP動作を実現)
+        /// X軸：時間軸、Y軸：目標速度な台形[／￣￣＼]となるような速度を調整する
+        /// 加速区間：目標速度に到達するように目標加速値で加速する
+        /// 減速区間：目標速度が現在速度 - 目標減速値となるように減速する
         /// </summary>
         /// <param name="targetSpeed"></param>
-        public void ControlSpeed(double restPosition)
+        public void ControlSpeed()
         {
-            //PTP動作
-            //加減速
-            var LX = 1 + Math.Abs((Cur.Speed + Cur.ResultAcc) / TargetDec);         //現在速度
-            var limitPoint = Math.Abs(LX * Cur.Speed) / 2 + Math.Abs(Cur.Speed);    //減速開始ポイント
-            var hugo1 = (0 <= Cur.Speed) ? +1.0 : -1.0;                             //現在の進行方向
-            var hugo2 = (0 <= restPosition) ? +1.0 : -1.0;                          //移動したい方向
-            var delt = Math.Abs(restPosition) - limitPoint;                         //減速開始ポイントまでの距離
+            // 残りX値の求め方
+            // ピタゴラスの定理より
+            // (X+1)*Y/2 ＝ Rest
+            // (X+1)*Y   ＝ 2 * Rest
+            // Y=AX, A=DECより
+            // (X+1)*X   ＝ 2 * Rest / DEC
+            //  X^2      ≒ 2 * Rest / DEC
+            //         X ≒ √(2 * Rest / DEC)
 
-            if (0 == delt)
+            //PTP動作(時間軸Xを基準として加減速を行う)
+            var restPosition = GoalPosition - Position;             //残り移動量
+            var rest = Math.Abs(restPosition);                      //残り移動量(絶対値)
+            var hugo2 = (0 <= restPosition) ? +1.0 : -1.0;          //移動したい方向
+            var MX = TargetSpeed / TargetDec;                       //減速開始位置X
+            var ZX = Math.Sqrt(2 * rest / TargetDec);               //現在位置X
+
+            if ((MX + 1) < ZX)
             {
-                //目標位置到達
-                ControlTorque(0.0);
-                OldControl = ControlMode.Stop;
-
-                if (0 == Cur.Speed)
-                {
-                    //デバッグ用チェックポイント
-                    Console.WriteLine("Finish");
-                    Console.ReadKey();
-                }
+                //加速区間(速度制限付き、加速カーブは加速上限で表現)
+                var spd = hugo2 * Math.Min(TargetAcc, TargetSpeed - Math.Abs(Speed));
+                ControlTorque(spd);
             }
-            else if (0 < delt)
+            else if (TargetDec < rest)
             {
-                //減速開始ポイントまで加速
-                if (OldControl == ControlMode.Dec)
-                {
-                    //現状維持(減速からすぐ加速しないよう１回休み)
-                    ControlTorque(0.0);
-                    OldControl = ControlMode.Stop;
-                }
-                if (TargetSpeed <= Math.Abs(Cur.Speed))
-                {
-                    //速度制限
-                    ControlTorque(0.0);
-                    OldControl = ControlMode.Stop;
-                }
-                else
-                {
-                    ControlTorque(+hugo2 * Math.Min(TargetAcc, Math.Abs(delt)));
-                    OldControl = ControlMode.Acc;
-                }
+                //減速区間(減速カーブは時系列で表現するので、目標速度にめがけてブレーキする)
+                var targetspeed = hugo2 * (ZX - 1.0) * TargetDec;
+                var spd = targetspeed - Speed;
+                ControlTorque(spd);
             }
             else
             {
-                //減速開始ポイント内なので減速
-                ControlTorque(-hugo1 * Math.Min(TargetDec, Math.Abs(Cur.Speed)));
-                OldControl = ControlMode.Dec;
+                //目標値まで微調整
+                var targetspeed = restPosition / DGain;
+                var spd = targetspeed - Speed;
+                ControlTorque(spd);
             }
         }
 
@@ -108,53 +97,52 @@ namespace ConsoleApplication1
         /// <param name="acc">加速度</param>
         public void ControlTorque(double targetAcc)
         {
-            Cur.ControlAcc = targetAcc;
-            Power += Cur.Torque * targetAcc;
+            ControlAcc = targetAcc;             //目標加速度（この値は補正値Diffの計算用に使用する）
+            Power += targetAcc + Diff;
             //トルク出力制限
             if (+LimitTorque < Power) Power = LimitTorque;
             if (-LimitTorque > Power) Power = -LimitTorque;
         }
 
+        static Random rnd = new Random();
         /// <summary>
         /// 実行
-        /// </summary>
+        /// /// </summary>
         public void OnNext()
         {
-            var random1 = (50 - Cur.Position) / 1000;
-            var random2 = -Cur.Speed / 800;
-            //random1 = random2 = 0.0;
-            var nextPosition = Cur.Position + Power * MaxTorque + random1 + random2;      // 外乱の影響の付加
+            var field = GetFieldPower();
+            var nextPosition = Position + Power * MotorGain + field;    // 外乱の影響の付加
             FeedBack(nextPosition);
-            Console.WriteLine($"Pos={Cur.Position}, Spd={Cur.Speed}, Pwr={Power}, Acc={Cur.ResultAcc}");
-            //Console.WriteLine(Cur.Speed);
+            Console.WriteLine($"Pos={Position}, Spd={Speed}, Pwr={Power}, Acc={ResultAcc}");
         }
 
         /// <summary>
-        /// フィードバック（センサ入力）
+        /// 環境負荷
+        /// </summary>
+        /// <returns></returns>
+        double GetFieldPower()
+        {
+            var random1 = (50 - Position) / 10;
+            var random2 = -Speed / 10;
+            var random3 = (rnd.Next(0, 200) - 100) / 10000.0;   //エンコーダ誤差はモーター１Tickの１００分の１まで
+            //random1 = random2 = 0.0;
+            random3 = 0;
+            return random1 + random2 + random3;
+        }
+
+        /// <summary>
+        /// フィードバック
         /// </summary>
         /// <param name="nextPosition"></param>
         void FeedBack(double nextPosition)
         {
-            var nxt = new Motor();
-            nxt.Position = nextPosition;
-            nxt.Speed = nextPosition - Cur.Position;
-            nxt.ResultAcc = nxt.Speed - Cur.Speed;
-            nxt.Torque = (0.0 == Cur.ControlAcc) ? 1.0 : (1.0 - (nxt.ResultAcc - Cur.ControlAcc) / Cur.ControlAcc);
-            Old = Cur;
-            Cur = nxt;
+            var speed = nextPosition - Position;
+            var acc = speed - Speed;
+            var diff = ControlAcc - acc;
+            Position = nextPosition;
+            Speed = speed;
+            ResultAcc = acc;
+            Diff += diff / IGain;
         }
     }
-
-    public class Motor
-    {
-        //フィードバック時に入力
-        public double Position { get; set; }                                // 現在位置
-        public double Speed { get; set; }                                   // 現在速度
-        public double ResultAcc { get; set; }                               // フィードバック加速度
-        public double Torque { get; set; } = 1.0;                           // 現在トルク
-
-        //設定する
-        public double ControlAcc { get; set; }                              // コントロール加速度
-    }
-
 }
