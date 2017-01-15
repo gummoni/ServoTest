@@ -10,7 +10,7 @@ namespace ConsoleApplication1
             for (var i = 0; i < 1300; i++)
             {
                 //servo.ControlTorque(-0.2);
-                servo.ControlSpeed();
+                servo.ControlPosition(100);
                 servo.OnNext();
             }
 
@@ -19,10 +19,24 @@ namespace ConsoleApplication1
         }
     }
 
+    /// <summary>
+    /// １回転4096（内部１Tickあたり１００分解能(11bit:2048 * 4現象 * 50(ギヤ比))）
+    /// エンコーダレベルで100Tick＝軸座標１Tick
+    /// 電気レベルで4096Tick = エンコーダ256Tick
+    /// 
+    /// 
+    /// 電気4:エンコーダ1
+    /// エンコーダ50:実角度1
+    /// 電気200:エンコーダ50:実角度1
+    /// 
+    /// 電気200*4096:エンコーダ50*4096:実角度1*4096
+    /// エンコーダ1Bit削って
+    /// 電気100*4096:エンコーダ50*2048:実角度1*4096
+    /// 
+    /// </summary>
     public class Servo
     {
         //サーボステータス
-        public double GoalPosition { get; set; } = 100; //目標位置
         public double Position { get; private set; }    //現在位置
         public double Speed { get; private set; }       //現在速度
         public double Power { get; set; } = 0.0;        //現在モーター出力
@@ -43,6 +57,15 @@ namespace ConsoleApplication1
         //固有特性
         const double MotorGain = 1.2;                   //最大トルク出力値
 
+        /// <summary>
+        /// 位置制御
+        /// </summary>
+        /// <param name="goalPosition"></param>
+        public void ControlPosition(double goalPosition)
+        {
+            var restPosition = goalPosition - Position;     //残り移動量
+            ControlSpeed(restPosition);
+        }
 
         /// <summary>
         /// 速度制御(PTP動作を実現)
@@ -51,7 +74,7 @@ namespace ConsoleApplication1
         /// 減速区間：目標速度が現在速度 - 目標減速値となるように減速する
         /// </summary>
         /// <param name="targetSpeed"></param>
-        public void ControlSpeed()
+        public void ControlSpeed(double restPosition)
         {
             // 残りX値の求め方
             // ピタゴラスの定理より
@@ -63,7 +86,6 @@ namespace ConsoleApplication1
             //         X ≒ √(2 * Rest / DEC)
 
             //PTP動作(時間軸Xを基準として加減速を行う)
-            var restPosition = GoalPosition - Position;             //残り移動量
             var rest = Math.Abs(restPosition);                      //残り移動量(絶対値)
             var hugo2 = (0 <= restPosition) ? +1.0 : -1.0;          //移動したい方向
             var MX = TargetSpeed / TargetDec;                       //減速開始位置X
@@ -103,6 +125,35 @@ namespace ConsoleApplication1
             if (+LimitTorque < Power) Power = LimitTorque;
             if (-LimitTorque > Power) Power = -LimitTorque;
         }
+
+        void ControlServo(int current, double power)
+        {
+            //TODO:サーボ制御処理はダミーコード
+
+            // 分解能は12bit（４０９６）だけどノイズ対策で1Bit減らして11Bit
+            // ４現像なので１回転 11 Bit * 2bit = 11bit (8192) * 4 = 32768 = １回転
+            // ギア比50:1なので
+            // 4096(12bit) * 100
+            // １回転0~4095 モーター内部分解能は100分解能
+
+            //サーボON中は必ずどちらかに出力かつ現在位置から±９０度にUVW出力
+            bool cw = (0 < power) || ((0 == power) && (0 < Diff));
+            if (cw)
+            {
+                //CW
+                var U = power * Math.Cos((current + 1024) % 4096);  // Cur + 90
+                var V = power * Math.Cos((current + 2389) % 4096);  // Cur + 210
+                var W = power * Math.Cos((current + 3755) % 4096);  // Cur + 330
+            }
+            else
+            {
+                //CCW
+                var U = power * Math.Cos((current + 3072) % 4096);  // Cur + 270
+                var V = power * Math.Cos((current + 341) % 4096);   // Cur + 30
+                var W = power * Math.Cos((current + 1707) % 4096);  // Cur + 150
+            }
+        }
+
 
         static Random rnd = new Random();
         /// <summary>
