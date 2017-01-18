@@ -24,65 +24,57 @@ namespace ConsoleApplication1
     {
         //http://toshiba.semicon-storage.com/jp/design-support/e-learning/mcupark/village/vector-1.html
 
-        //brushless motor
-        float direction = 0.0f;    //+90(CW), +70, +50, +30, +20, 0,  -20, -40, 60, -70, -90(CCW)
+        float targetD;
+        float targetQ;
+        PI DControl = new PI();
+        PI QControl = new PI();
 
-        public void Diaptch(float power, float u, float v, float w, out float U, out float V, out float W)
+        public void Direction(float power, double degree)
         {
-            float a, b;
-            float A, B;
-            var sinkaku = GetSinkaku(power);
-            UVWToAB(u, v, w, out a, out b);         //AB変換
-            RotateXY(a, b, sinkaku, out A, out B);  //次の進角まで回転
-            ABToUVW(A, B, out U, out V, out W);     //UVW変換
+            targetD = (float)Math.Sin(degree) * power;
+            targetQ = (float)Math.Cos(degree) * power;
         }
 
-        float GetSinkaku(float power)
+        //TODO:rm マグネットセンサの角度rm（４現象に注意）
+        public void Feedback(float u, float v, float w, float rm, float re, out float U, out float V, out float W)
         {
-            if (0.0f < power)
-            {
-                //CW
-                if (+90.0f > direction)
-                {
-                    direction += 20.0f;
-                }
-            }
-            else if (0.0f > power)
-            {
-                //CCW
-                if (-90.0f < direction)
-                {
-                    direction -= 20.0f;
-                }
-            }
-            else
-            {
-                //BRAKE
-                direction = 0.0f;
-            }
+            //クラーク変換(３つのベクトルを１つのベクトルにまとめる)
+            var a = u;
+            var b = (u + 2.0f * v) / Math.Sqrt(3);
 
-            return direction;
+            //パーク変換(時計方向に回転させ、DQ成分を求める
+            var sinrm = Math.Sin(rm);
+            var cosrm = Math.Cos(rm);
+            var d = (float)(+a * cosrm + b * sinrm);
+            var q = (float)(-a * sinrm + b * cosrm);
+
+            //PI制御
+            var D = DControl.Feedback(targetD, d);
+            var Q = QControl.Feedback(targetQ, q);
+
+            //逆パーク変換(半時計方向に回転させ、進角を決める)　進角は+90/0/-90など
+            var sinre = Math.Sin(re);
+            var cosre = Math.Cos(re);
+            var A = D * cosre - Q * sinre;
+            var B = D * sinre + Q * cosre;
+
+            //逆クラーク変換
+            U = (float)A;
+            V = (float)((Math.Sqrt(3) * B - A) / 2.0f);
+            W = -(u + v);
+
+            //TODO UVW値：-1~+1の範囲に収めるようにする？
         }
+    }
 
-        void RotateXY(float a, float b, float r, out float A, out float B)
+    public class PI
+    {
+        float diff;
+        public float Feedback(float P, float value)
         {
-            var sinp = Math.Sin(r);
-            var cosp = Math.Cos(r);
-            A = (float)(a * cosp - b * sinp);
-            B = (float)(a * sinp + b * cosp);
-        }
-
-        void ABToUVW(float a, float b, out float u, out float v, out float w)
-        {
-            u = (float)Math.Sqrt(2.0 / 3.0) * a;
-            w = (float)((1.0f / Math.Sqrt(2.0/3.0)) * (-a - Math.Sqrt(3) * b));
-            v = -u - w;
-        }
-
-        void UVWToAB(float u, float v, float w, out float a, out float b)
-        {
-            a = (float)(Math.Sqrt(3.0 / 2.0) * u);
-            b = (float)(Math.Sqrt(1.0 / 2.0) * (-u - 2 * w));
+            var err = P - value;
+            diff += err;
+            return P + diff;
         }
     }
 
